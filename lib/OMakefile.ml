@@ -21,7 +21,7 @@ install Library ".DEFAULT" [
 
   (* Camlp4 *)
   Flags [
-    (*"perl.ml",		"-syntax camlp4o";*)
+    "perl.ml",		"-syntax camlp4o";
   ];
 
   Var ("OM_CXXFLAGS", "$(shell $(PERL) -MExtUtils::Embed -e ccopts)");

@@ -40,7 +40,7 @@ external call : string -> 'a sv list -> 'b sv list = "ml_Perl_call"
 external sv_of_fun1 : ('a sv -> 'b sv) -> ('a -> 'b) sv = "ml_Perl_sv_of_fun1"
 
 
-module Types : sig
+module Foreign : sig
 
   type 'a fn
 
@@ -49,29 +49,70 @@ module Types : sig
   val float : float fn
 
   val ( @-> ) : 'a fn -> 'b fn -> ('a -> 'b) fn
+  val ( @* ) : 'a fn -> 'b fn -> ('a * 'b) fn
 
-  (*val foreign : string -> ('a -> 'b) fn -> 'a -> 'b*)
+  val foreign : string -> ('a -> 'b) fn -> 'a -> 'b
 
 end = struct
 
   type _ fn =
     | Function : 'a fn * 'b fn -> ('a -> 'b) fn
-    | Int
-    | Float
-    | String
+    | Tuple : 'a fn * 'b fn -> ('a * 'b) fn
+    | Int : int fn
+    | Float : float fn
+    | String : string fn
 
   let int = Int
   let float = Float
   let string = String
 
   let ( @-> ) a b = Function (a, b)
+  let ( @* ) a b = Tuple (a, b)
+
+  let rec print : type a. unit -> a fn -> string = fun () -> function
+    | Function (a, b) ->
+        Printf.sprintf "Function (%a, %a)"
+          print a print b
+    | Tuple (a, b) ->
+        Printf.sprintf "Tuple (%a, %a)"
+          print a print b
+    | Int -> "Int"
+    | Float -> "Float"
+    | String -> "String"
+
+
+  let rec to_sv : type a. a fn -> a -> a sv = function
+    | Function (a, b) -> failwith "Function"
+    | Tuple (a, b) -> failwith "Tuple"
+    | Int -> sv_of_int
+    | Float -> sv_of_float
+    | String -> sv_of_string
+
+
+  external string_of_sv : 'a sv -> string = "ml_Perl_string_of_sv"
+  let push sv =
+    Printf.printf "push %s\n" (string_of_sv sv)
+
 
   (*external foreign : string -> ('a -> 'b) fn -> 'a -> 'b = "ml_Perl_invoke"*)
+  let rec foreign : type a. string -> a fn -> a = fun name -> function
+    | Function (arg, ret) ->
+        fun a ->
+          push (to_sv arg a);
+          foreign name ret
+    | Tuple (a, b) ->
+        let a = foreign name a in
+        let b = foreign name b in
+        (a, b)
+    | Int -> 3
+    | Float -> 3.0
+    | String -> "hello"
 
 end
 
 
-(*let say = Types.(foreign "say" (string @-> int))*)
+let say = Foreign.(foreign "say" (string @-> int @-> int));;
+Printf.printf "return %d\n" (say "hello" 300);;
 
 let say msg =
   match call "say" [sv_of_string msg] with
