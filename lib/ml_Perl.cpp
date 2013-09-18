@@ -151,9 +151,19 @@ ml_Perl_init (value vargv)
     "-e", "use common::sense;",
     "-e", "use Data::Dumper;",
     "-e", "use Test::LeakTrace::Script;",
-    "-e", "sub say { print @_, \"\\n\"; (1, 2, '3 apples', @_) }",
-    "-e", "sub make_closure { my $clos = shift; sub { OCaml::invoke_closure ($clos, @_) } }",
-    "-e", "sub test_invoke { make_closure (@_)->('world') }",
+    "-e", "sub say {",
+    "-e", "  print @_, \"\\n\";",
+    "-e", "  (1, 2, '3 apples', @_)",
+    "-e", "}",
+    "-e", "sub make_closure {",
+    "-e", "  my $clos = shift;",
+    "-e", "  sub {",
+    "-e", "    OCaml::invoke_closure ($clos, @_)",
+    "-e", "  }",
+    "-e", "}",
+    "-e", "sub test_invoke {",
+    "-e", "  make_closure (@_)->('world')",
+    "-e", "}",
     0
   };
 
