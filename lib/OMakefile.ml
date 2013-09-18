@@ -6,13 +6,22 @@ install Library ".DEFAULT" [
 
   (* Sources *)
   Modules [
-    "Interpreter";
     "Perl";
   ];
 
+  (* C/C++ Sources *)
   Sources [
-    "ml_Interpreter.cpp";
     "ml_Perl.cpp";
+  ];
+
+  (* Library dependencies *)
+  OCamlRequires [
+    "sexplib.syntax";
+  ];
+
+  (* Camlp4 *)
+  Flags [
+    (*"perl.ml",		"-syntax camlp4o";*)
   ];
 
   Var ("OM_CXXFLAGS", "$(shell $(PERL) -MExtUtils::Embed -e ccopts)");
