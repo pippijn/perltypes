@@ -42,80 +42,117 @@ external sv_of_fun1 : ('a sv -> 'b sv) -> ('a -> 'b) sv = "ml_Perl_sv_of_fun1"
 
 module Foreign : sig
 
+  type 'a typ
   type 'a fn
 
-  val int : int fn
-  val string : string fn
-  val float : float fn
+  val int : int typ
+  val string : string typ
+  val float : float typ
 
-  val ( @-> ) : 'a fn -> 'b fn -> ('a -> 'b) fn
-  val ( @* ) : 'a fn -> 'b fn -> ('a * 'b) fn
+  val ( @-> ) : 'a typ -> 'b fn -> ('a -> 'b) fn
+  val returns : 'a typ -> 'a fn
+
+  val ( @* ) : 'a typ -> 'b typ -> ('a * 'b) typ
 
   val foreign : string -> ('a -> 'b) fn -> 'a -> 'b
 
 end = struct
 
+  type _ typ =
+    | Tuple : 'a typ * 'b typ -> ('a * 'b) typ
+    | Int : int typ
+    | Float : float typ
+    | String : string typ
+
   type _ fn =
-    | Function : 'a fn * 'b fn -> ('a -> 'b) fn
-    | Tuple : 'a fn * 'b fn -> ('a * 'b) fn
-    | Int : int fn
-    | Float : float fn
-    | String : string fn
+    | Returns : 'a typ -> 'a fn
+    | Function : 'a typ * 'b fn -> ('a -> 'b) fn
 
   let int = Int
   let float = Float
   let string = String
 
   let ( @-> ) a b = Function (a, b)
+  let returns a = Returns (a)
+
   let ( @* ) a b = Tuple (a, b)
 
-  let rec print : type a. unit -> a fn -> string = fun () -> function
-    | Function (a, b) ->
-        Printf.sprintf "Function (%a, %a)"
-          print a print b
+  let rec print_typ : type a. unit -> a typ -> string = fun () -> function
     | Tuple (a, b) ->
         Printf.sprintf "Tuple (%a, %a)"
-          print a print b
+          print_typ a print_typ b
     | Int -> "Int"
     | Float -> "Float"
     | String -> "String"
 
+  let rec print_fn : type a. unit -> a fn -> string = fun () -> function
+    | Returns (a) ->
+        Printf.sprintf "Returns (%a)"
+          print_typ a
+    | Function (a, b) ->
+        Printf.sprintf "Function (%a, %a)"
+          print_typ a print_fn b
 
-  let rec to_sv : type a. a fn -> a -> a sv = function
-    | Function (a, b) -> failwith "Function"
+
+  let rec to_sv : type a. a typ -> a -> a sv = function
     | Tuple (a, b) -> failwith "Tuple"
     | Int -> sv_of_int
     | Float -> sv_of_float
     | String -> sv_of_string
 
 
-  external string_of_sv : 'a sv -> string = "ml_Perl_string_of_sv"
-  let push sv =
-    Printf.printf "push %s\n" (string_of_sv sv)
+  let sv_to : type a. a typ -> a sv -> a = function
+    | Tuple (a, b) -> failwith "Tuple"
+    | Int -> int_of_sv
+    | Float -> float_of_sv
+    | String -> string_of_sv
 
 
-  (*external foreign : string -> ('a -> 'b) fn -> 'a -> 'b = "ml_Perl_invoke"*)
-  let rec foreign : type a. string -> a fn -> a = fun name -> function
+  let unsafe_dump_sp : type sp. sp -> string list =
+  fun sp ->
+    let rec unsafe_dump args sp =
+      if Obj.magic sp == () then
+        args
+      else
+        let (sv, sp) = Obj.magic sp in
+        unsafe_dump (string_of_sv (Obj.magic sv) :: args) sp
+    in
+    unsafe_dump [] sp
+
+
+  let rec invoke : type a sp. sp -> string -> a typ -> a =
+  fun sp name ret ->
+    Printf.printf "call %s (%s)\n"
+      name (String.concat ", " (unsafe_dump_sp sp));
+
+    (* call function here, convert return value to ocaml value *)
+    match call name (List.rev (Obj.magic sp)) with
+    | [result] ->
+        sv_to ret result
+    | _ -> assert false
+
+
+  let rec foreign : type a sp. sp -> string -> a fn -> a =
+  fun sp name -> function
+    | Returns (ret) ->
+        invoke sp name ret
     | Function (arg, ret) ->
         fun a ->
-          push (to_sv arg a);
-          foreign name ret
-    | Tuple (a, b) ->
-        let a = foreign name a in
-        let b = foreign name b in
-        (a, b)
-    | Int -> 3
-    | Float -> 3.0
-    | String -> "hello"
+          let sp = (to_sv arg a, sp) in
+          foreign sp name ret
+
+  let foreign : type a b. string -> (a -> b) fn -> a -> b =
+  fun name signature ->
+    foreign () name signature
 
 end
 
 
-let say = Foreign.(foreign "say" (string @-> int @-> int));;
-Printf.printf "return %d\n" (say "hello" 300);;
+let say = Foreign.(foreign "say" (string @-> int @-> returns int));;
+Printf.printf "return %d\n" (say "hello" 3);;
 
 let say msg =
-  match call "say" [sv_of_string msg] with
+  match call "stuff" [sv_of_string msg] with
   | results -> List.map string_of_sv results
 
 
