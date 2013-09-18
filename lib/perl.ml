@@ -42,66 +42,55 @@ external sv_of_fun1 : ('a sv -> 'b sv) -> ('a -> 'b) sv = "ml_Perl_sv_of_fun1"
 
 module Foreign : sig
 
-  type 'a typ
   type 'a fn
 
-  val int : int typ
-  val string : string typ
-  val float : float typ
+  val int : int fn
+  val string : string fn
+  val float : float fn
 
-  val ( @-> ) : 'a typ -> 'b fn -> ('a -> 'b) fn
-  val returns : 'a typ -> 'a fn
-
-  val ( @* ) : 'a typ -> 'b typ -> ('a * 'b) typ
+  val ( @-> ) : 'a fn -> 'b fn -> ('a -> 'b) fn
+  val ( @* ) : 'a fn -> 'b fn -> ('a * 'b) fn
 
   val foreign : string -> ('a -> 'b) fn -> 'a -> 'b
 
 end = struct
 
-  type _ typ =
-    | Tuple : 'a typ * 'b typ -> ('a * 'b) typ
-    | Int : int typ
-    | Float : float typ
-    | String : string typ
-
   type _ fn =
-    | Returns : 'a typ -> 'a fn
-    | Function : 'a typ * 'b fn -> ('a -> 'b) fn
+    | Function : 'a fn * 'b fn -> ('a -> 'b) fn
+    | Tuple : 'a fn * 'b fn -> ('a * 'b) fn
+    | Int : int fn
+    | Float : float fn
+    | String : string fn
 
   let int = Int
   let float = Float
   let string = String
 
   let ( @-> ) a b = Function (a, b)
-  let returns a = Returns (a)
-
   let ( @* ) a b = Tuple (a, b)
 
-  let rec print_typ : type a. unit -> a typ -> string = fun () -> function
+  let rec print_fn : type a. unit -> a fn -> string = fun () -> function
+    | Function (a, b) ->
+        Printf.sprintf "Function (%a, %a)"
+          print_fn a print_fn b
     | Tuple (a, b) ->
         Printf.sprintf "Tuple (%a, %a)"
-          print_typ a print_typ b
+          print_fn a print_fn b
     | Int -> "Int"
     | Float -> "Float"
     | String -> "String"
 
-  let rec print_fn : type a. unit -> a fn -> string = fun () -> function
-    | Returns (a) ->
-        Printf.sprintf "Returns (%a)"
-          print_typ a
-    | Function (a, b) ->
-        Printf.sprintf "Function (%a, %a)"
-          print_typ a print_fn b
 
-
-  let rec to_sv : type a. a typ -> a -> a sv = function
+  let rec to_sv : type a. a fn -> a -> a sv = function
+    | Function (a, b) -> failwith "Function"
     | Tuple (a, b) -> failwith "Tuple"
     | Int -> sv_of_int
     | Float -> sv_of_float
     | String -> sv_of_string
 
 
-  let sv_to : type a. a typ -> a sv -> a = function
+  let sv_to : type a. a fn -> a sv -> a = function
+    | Function (a, b) -> failwith "Function"
     | Tuple (a, b) -> failwith "Tuple"
     | Int -> int_of_sv
     | Float -> float_of_sv
@@ -110,36 +99,34 @@ end = struct
 
   let unsafe_dump_sp : type sp. sp -> string list =
   fun sp ->
-    let rec unsafe_dump args sp =
-      if Obj.magic sp == () then
-        args
-      else
-        let (sv, sp) = Obj.magic sp in
-        unsafe_dump (string_of_sv (Obj.magic sv) :: args) sp
-    in
-    unsafe_dump [] sp
+    List.rev_map string_of_sv (Obj.magic sp)
 
 
-  let rec invoke : type a sp. sp -> string -> a typ -> a =
+  let rec invoke : type a sp. sp -> string -> a fn -> a =
   fun sp name ret ->
     Printf.printf "call %s (%s)\n"
       name (String.concat ", " (unsafe_dump_sp sp));
+    flush stdout;
 
     (* call function here, convert return value to ocaml value *)
-    match call name (List.rev (Obj.magic sp)) with
+    match List.rev (call name (List.rev (Obj.magic sp))) with
     | [result] ->
         sv_to ret result
-    | _ -> assert false
+    | sp ->
+        failwith (
+          Printf.sprintf "call unexpectedly returned (%s)"
+            (String.concat ", " (unsafe_dump_sp sp))
+        )
 
 
   let rec foreign : type a sp. sp -> string -> a fn -> a =
   fun sp name -> function
-    | Returns (ret) ->
-        invoke sp name ret
     | Function (arg, ret) ->
         fun a ->
           let sp = (to_sv arg a, sp) in
           foreign sp name ret
+    | ret ->
+        invoke sp name ret
 
   let foreign : type a b. string -> (a -> b) fn -> a -> b =
   fun name signature ->
@@ -148,8 +135,8 @@ end = struct
 end
 
 
-let say = Foreign.(foreign "say" (string @-> int @-> returns int));;
-Printf.printf "return %d\n" (say "hello" 3);;
+let say = Foreign.(foreign "say" (string @-> float @-> int @-> int));;
+Printf.printf "return %d\n" (say "hello" 123.456 3);;
 
 let say msg =
   match call "stuff" [sv_of_string msg] with

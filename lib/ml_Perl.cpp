@@ -152,7 +152,7 @@ ml_Perl_init (value vargv)
     "-e", "use Data::Dumper;",
     "-e", "use Test::LeakTrace::Script;",
     "-e", "sub say {",
-    "-e", "  print \"$_: $_[0]\\n\" for (1 .. $_[1]);",
+    "-e", "  print \"$_: $_[0] and $_[1]\\n\" for (1 .. $_[2]);",
     "-e", "  300",
     "-e", "}",
     "-e", "sub stuff {",
