@@ -7,16 +7,12 @@ let test () =
   assert (string_of_sv (sv_of_string "hello") = "hello");
 
   let foo = (1, "Hello") in
-  assert (value_of_sv (sv_of_value foo) == foo);
+  let foosv = sv_of_value foo in
+  Gc.compact ();
+  assert (value_of_sv foosv == foo);
 
   List.iter (Printf.printf "got: %s\n")
     (stuff "hello");
-
-  List.iter (Printf.printf "got: %s\n")
-    (test_invoke (fun s ->
-      print_endline ("in closure: " ^ s);
-      "hello " ^ s
-    ));
 ;;
 
 

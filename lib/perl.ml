@@ -155,16 +155,6 @@ let stuff msg =
   | results -> List.map string_of_sv results
 
 
-let test_invoke fn =
-  let fn =
-    sv_of_fun1 1 (fun s ->
-      sv_of_string (fn (string_of_sv s))
-    )
-  in
-
-  List.map string_of_sv (call "test_invoke1" [fn])
-
-
 (* new stuff using Foreign *)
 let say =
   Foreign.(foreign "say" (string @-> float @-> int @-> int))
