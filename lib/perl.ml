@@ -67,7 +67,7 @@ end = struct
 
   type _ sp =
     | Nil : unit sp
-    | Cons : 'a sv * 'b sp -> ('a * 'b) sp
+    | Cons : 'a sv * 'b sp -> ('a -> 'b) sp
 
   let char	= Primitive (sv_of_char,	char_of_sv	)
   let bool	= Primitive (sv_of_bool,	bool_of_sv	)
