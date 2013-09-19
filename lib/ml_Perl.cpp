@@ -364,8 +364,7 @@ ml_Perl_sv_of_int64 (value val)
 export value
 ml_Perl_value_of_sv (value val)
 {
-  SV *sv = SV_val (val);
-  return *sv_camlroot (sv);
+  return *sv_camlroot (SV_val (val));
 }
 
 export value
@@ -450,14 +449,14 @@ ml_Perl_call (value name, value args)
     [&args] (SV **sp) {
       mlsize_t const argc = list_length (args);
 
-      EXTEND (SP, argc);
-      SP += argc;
+      EXTEND (sp, argc);
+      sp += argc;
       while (args != Val_emptylist)
         {
-          *SP-- = SV_val (Field (args, 0));
+          *sp-- = SV_val (Field (args, 0));
           args = Field (args, 1);
         }
-      return SP + argc;
+      return sp + argc;
     },
 
     // on_success
@@ -492,7 +491,7 @@ ml_Perl_sv_of_fun1 (value closure)
     // fill_args
     [&closure] (SV **sp) {
       XPUSHs (sv_2mortal (sv_of_value (closure)));
-      return SP;
+      return sp;
     },
 
     // on_success
