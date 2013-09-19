@@ -1,4 +1,5 @@
 #include <vector>
+#include <type_traits>
 
 #include <EXTERN.h>
 #include <XSUB.h>
@@ -51,15 +52,51 @@ template<typename T>
 static value
 make_value (T const &v)
 {
-  value val = alloc_custom (&value_info<T>::ops, sizeof v, 0, 1);
+  CAMLparam0 ();
+  CAMLlocal1 (val);
+
+  val = alloc_custom (&value_info<T>::ops, sizeof v, 0, 1);
   value_cast<T> (val) = v;
-  return val;
+
+  CAMLreturn (val);
 }
 
 #define export extern "C" CAMLprim
 #define SV_val value_cast<SV *>
 
 static PerlInterpreter *my_perl;
+
+template<int Flags = G_ARRAY, typename FillArgs, typename OnSuccess>
+static value
+perl_call (char const *name,
+           FillArgs fill_args,
+           OnSuccess on_success)
+{
+  dSP;
+  ENTER;
+  SAVETMPS;
+  PUSHMARK (SP);
+
+  SP = fill_args (SP);
+
+  PUTBACK;
+  int count = call_pv (name, Flags | G_EVAL);
+  SPAGAIN;
+
+  value retval;
+  if (!SvTRUE (ERRSV))
+    retval = on_success (SP, count);
+
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (SvTRUE (ERRSV))
+    failwith (SvPV_nolen (ERRSV));
+
+  return retval;
+}
+
 
 template<>
 struct value_info<SV *>::operations
@@ -68,6 +105,8 @@ struct value_info<SV *>::operations
   static constexpr char const *identifier = "Perl object";
 
   static void finalize (value vsv) {
+    if (!my_perl)
+      failwith ("OCaml code used object, but Perl interpreter is already destroyed");
     SV *sv = SV_val (vsv);
     SvREFCNT_dec (sv);
   }
@@ -93,7 +132,7 @@ sv_camlroot (SV *sv)
   else if (MAGIC *mg = mg_find (sv, PERL_MAGIC_ext))
     return reinterpret_cast<value *> (mg->mg_ptr);
 
-  croak ("perl code used object, but OCaml object is already destroyed, caught");
+  croak ("perl code used object, but OCaml object is already destroyed");
 }
 
 
@@ -123,7 +162,7 @@ xs_init (pTHX)
   dXSUB_SYS;
 
   newXS ("DynaLoader::boot_DynaLoader", boot_DynaLoader, __FILE__);
-  newXS ("OCaml::invoke_closure", invoke_closure, __FILE__);
+  newXSproto ("OCaml::invoke_closure", invoke_closure, __FILE__, "$@");
 }
 
 export value
@@ -162,11 +201,11 @@ ml_Perl_init (value vargv)
     "-e", "sub make_closure {",
     "-e", "  my $clos = shift;",
     "-e", "  sub {",
-    "-e", "    OCaml::invoke_closure ($clos, @_)",
+    "-e", "    OCaml::invoke_closure $clos, @_",
     "-e", "  }",
     "-e", "}",
     "-e", "sub test_invoke {",
-    "-e", "  make_closure (@_)->('world')",
+    "-e", "  $_[0]->('world')",
     "-e", "}",
     0
   };
@@ -224,11 +263,11 @@ static MGVTBL value_vtbl = {
   /* local */ 0,
 };
 
-export value
-ml_Perl_sv_of_value (value val)
+static SV *
+sv_of_value (value val)
 {
   if (val == Val_unit)
-    return make_value (&PL_sv_undef);
+    return &PL_sv_undef;
 
   SV *self = reinterpret_cast<SV *> (newHV ());
   HV *stash = 0;
@@ -242,7 +281,13 @@ ml_Perl_sv_of_value (value val)
   if (stash)
     self = sv_bless (self, stash);
 
-  return make_value (self);
+  return self;
+}
+
+export value
+ml_Perl_sv_of_value (value val)
+{
+  return make_value (sv_of_value (val));
 }
 
 export value
@@ -382,24 +427,24 @@ ml_Perl_call (value name, value args)
   CAMLparam2 (name, args);
   CAMLlocal2 (retval, cons);
 
-  dSP;
-  ENTER;
-  SAVETMPS;
-  PUSHMARK (SP);
-  EXTEND (SP, list_length (args));
+  CAMLreturn (perl_call (String_val (name),
 
-  while (args != Val_emptylist)
-    {
-      PUSHs (SV_val (Field (args, 0)));
-      args = Field (args, 1);
-    }
+    // fill_args
+    [&args] (SV **sp) {
+      mlsize_t const argc = list_length (args);
 
-  PUTBACK;
-  int count = call_pv (String_val (name), G_ARRAY | G_EVAL);
-  SPAGAIN;
+      EXTEND (SP, argc);
+      SP += argc;
+      while (args != Val_emptylist)
+        {
+          *SP-- = SV_val (Field (args, 0));
+          args = Field (args, 1);
+        }
+      return SP + argc;
+    },
 
-  if (!SvTRUE (ERRSV))
-    {
+    // on_success
+    [&retval, &cons] (SV **sp, int count) {
       retval = Val_emptylist;
       while (count--)
         {
@@ -408,16 +453,11 @@ ml_Perl_call (value name, value args)
           Store_field (cons, 1, retval);
           retval = cons;
         }
+
+      return retval;
     }
 
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  if (SvTRUE (ERRSV))
-    failwith (SvPV_nolen (ERRSV));
-
-  CAMLreturn (retval);
+  ));
 }
 
 
@@ -428,7 +468,22 @@ ml_Perl_call (value name, value args)
 export value
 ml_Perl_sv_of_fun1 (value closure)
 {
-  return ml_Perl_sv_of_value (closure);
+  CAMLparam1 (closure);
+
+  CAMLreturn (perl_call<G_SCALAR> ("make_closure",
+
+    // fill_args
+    [&closure] (SV **sp) {
+      XPUSHs (sv_2mortal (sv_of_value (closure)));
+      return SP;
+    },
+
+    // on_success
+    [] (SV **sp, int count) {
+      return make_value (newSVsv (POPs));
+    }
+
+  ));
 }
 
 

@@ -10,7 +10,7 @@ let test () =
   assert (value_of_sv (sv_of_value foo) == foo);
 
   List.iter (Printf.printf "got: %s\n")
-    (say "hello");
+    (stuff "hello");
 
   List.iter (Printf.printf "got: %s\n")
     (test_invoke (fun s ->

@@ -1,7 +1,7 @@
 type 'a sv
 
-external init : string array -> unit = "ml_Perl_init"
-external fini : unit -> unit = "ml_Perl_fini"
+external init : string array -> unit	= "ml_Perl_init"
+external fini : unit -> unit		= "ml_Perl_fini"
 
 let init = init Sys.argv
 let fini = fun () ->
@@ -62,6 +62,10 @@ end = struct
     | Float : float fn
     | String : string fn
 
+  type _ sp =
+    | Nil : unit sp
+    | Cons : 'a sv * 'b sp -> ('a * 'b) sp
+
   let int = Int
   let float = Float
   let string = String
@@ -97,20 +101,20 @@ end = struct
     | String -> string_of_sv
 
 
-  let unsafe_dump_sp : type sp. sp -> string list =
-  fun sp ->
-    List.rev_map string_of_sv (Obj.magic sp)
+  external call : string -> 'a sp -> 'b sp = "ml_Perl_call"
 
+  let invoke sp name ret =
+    let unsafe_dump_sp sp =
+      List.rev_map string_of_sv (Obj.magic sp)
+    in
 
-  let rec invoke : type a sp. sp -> string -> a fn -> a =
-  fun sp name ret ->
     Printf.printf "call %s (%s)\n"
       name (String.concat ", " (unsafe_dump_sp sp));
     flush stdout;
 
-    (* call function here, convert return value to ocaml value *)
-    match List.rev (call name (List.rev (Obj.magic sp))) with
-    | [result] ->
+    (* Call function here, convert return value to OCaml value. *)
+    match call name sp with
+    | Cons (result, Nil) ->
         sv_to ret result
     | sp ->
         failwith (
@@ -119,18 +123,17 @@ end = struct
         )
 
 
-  let rec foreign : type a sp. sp -> string -> a fn -> a =
+  let rec foreign : type a b. b sp -> string -> a fn -> a =
   fun sp name -> function
     | Function (arg, ret) ->
         fun a ->
-          let sp = (to_sv arg a, sp) in
+          let sp = Cons (to_sv arg a, sp) in
           foreign sp name ret
     | ret ->
         invoke sp name ret
 
-  let foreign : type a b. string -> (a -> b) fn -> a -> b =
-  fun name signature ->
-    foreign () name signature
+  let foreign name signature =
+    foreign Nil name signature
 
 end
 
@@ -138,7 +141,7 @@ end
 let say = Foreign.(foreign "say" (string @-> float @-> int @-> int));;
 Printf.printf "return %d\n" (say "hello" 123.456 3);;
 
-let say msg =
+let stuff msg =
   match call "stuff" [sv_of_string msg] with
   | results -> List.map string_of_sv results
 
