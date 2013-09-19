@@ -12,17 +12,17 @@ Perl code:
 =begin code perl
 
    sub say {
-     print "$_: $_[0] and $_[1]\n"
-        for 1 .. $_[2];
-     300
+      print "$_: $_[0] and $_[1]\n"
+         for 1 .. $_[2];
+      300
    }
 
    sub test_invoke1 {
-     $_[0]->('world')
+      $_[0]->('world')
    }
 
    sub test_invoke2 {
-     $_[0]->('world')->('hehe')
+      $_[0]->('world')->('hehe')
    }
 
 =end
