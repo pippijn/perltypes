@@ -16,11 +16,6 @@ sub say {
   300
 }
 
-sub stuff {
-  print @_, "\n";
-  (1, 2, '3 apples', @_)
-}
-
 sub test_invoke1 {
   $_[0]->('world')
 }
