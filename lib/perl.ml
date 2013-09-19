@@ -11,8 +11,7 @@ let fini = fun () ->
   fini ();
 ;;
 
-external undef		: unit		-> unit sv	= "ml_Perl_undef"
-let undef = undef ()
+external undef		: unit		-> 'a sv	= "ml_Perl_undef"
 
 external sv_of_value	: 'a		-> 'a sv	= "ml_Perl_sv_of_value"
 external sv_of_char	: char		-> char sv	= "ml_Perl_sv_of_char"
@@ -126,10 +125,6 @@ end = struct
       List.rev_map string_of_sv (Obj.magic sp)
     in
 
-    Printf.printf "call %s (%s)\n"
-      name (String.concat ", " (unsafe_dump_sp sp));
-    flush stdout;
-
     (* Call function here, convert return value to OCaml value. *)
     match call name sp with
     | Cons (result, Nil) ->
@@ -155,44 +150,116 @@ end = struct
 
 end
 
-(* old stuff *)
+(* old stuff not supported by new stuff yet (tuple returns) *)
 let stuff msg =
-  match call "stuff" [sv_of_string msg] with
-  | results -> List.map string_of_sv results
+  List.map string_of_sv
+    (call "stuff" [sv_of_string msg])
 
 
 (* new stuff using Foreign *)
 let say =
   Foreign.(foreign "say" (string @-> float @-> int @-> int))
 
-let test_invoke1 =
-  Foreign.(foreign "test_invoke1" ((string @-> string) @-> string))
+let make_invoke1 typ =
+  Foreign.(foreign "test_invoke1" ((typ @-> typ) @-> typ @-> typ))
+
+let test_invoke1 = make_invoke1 Foreign.string
 
 let test_invoke2 =
   Foreign.(foreign "test_invoke2" ((string @-> string @-> string) @-> string))
 
 
-let () =
+let stress_test () =
+  print_endline "starting stress-test";
+
+  let continue = ref true in
+  let i = ref 0 in
+
+  let invoke_char = make_invoke1 Foreign.char in
+  let invoke_bool = make_invoke1 Foreign.bool in
+  let invoke_string = make_invoke1 Foreign.string in
+  let invoke_float = make_invoke1 Foreign.float in
+  let invoke_int = make_invoke1 Foreign.int in
+  let invoke_nativeint = make_invoke1 Foreign.nativeint in
+  let invoke_int32 = make_invoke1 Foreign.int32 in
+  let invoke_int64 = make_invoke1 Foreign.int64 in
+
+  let n64 = Nativeint.of_int 64 in
+  let n65 = Nativeint.of_int 65 in
+
+  let start = Unix.gettimeofday () in
+  while !continue do
+    (*Gc.compact ();*)
+
+    let n = 1250 in
+
+    let local_start = Unix.gettimeofday () in
+    for j = 1 to n do
+      assert (invoke_char (fun x -> Char.chr (Char.code x + 1)) 'a' = 'b');
+      assert (invoke_bool not true = false);
+      assert (invoke_string (fun x -> "hello " ^ x) "world" = "hello world");
+      assert (invoke_float (fun x -> x *. 2.0) 64.0 = 128.0);
+      assert (invoke_int (fun x -> x * 2) 64 = 128);
+      assert (invoke_nativeint Nativeint.succ n64 = n65);
+      assert (invoke_int32 Int32.succ 64l = 65l);
+      assert (invoke_int64 Int64.succ 64L = 65L);
+    done;
+
+    incr i;
+
+    let finish = Unix.gettimeofday () in
+
+    let call_count = !i * n * 8 in
+    let total_time = finish -. start in
+
+    Printf.printf "\r[+%.06fs, %.06fs] %d calls (avg: %.06fs)"
+      (finish -. local_start)
+      total_time
+      call_count
+      (total_time /. float call_count);
+    flush stdout;
+  done;
+;;
+
+
+let test () =
+  for i = 0 to 100 do
+    assert (int_of_sv (sv_of_int 200) = 200);
+    assert (string_of_sv (sv_of_string "hello") = "hello");
+
+    let foo = (1, "Hello") in
+    let foosv = sv_of_value foo in
+    Gc.compact ();
+    assert (value_of_sv foosv == foo);
+
+    ignore (sv_of_fun1 1 (fun x -> x));
+  done;
+
+  List.iter (Printf.printf "got: %s\n")
+    (stuff "hello");
+
   Printf.printf "say returned %d\n"
     (say "hello" 123.456 3);
 
-  Printf.printf "closure call returned: %s\n"
+  Printf.printf "closure call (1) returned: %s\n"
     (test_invoke1 (fun x ->
       "hello " ^ x
-    ));
+    ) "world");
 
   begin try
-    Printf.printf "closure call returned: %s\n"
+    Printf.printf "closure call (1) returned: %s\n"
       (test_invoke1 (fun x ->
         failwith ("thrown from closure: hello " ^ x)
-      ));
+      ) "world");
     assert false;
   with Failure msg ->
     print_endline ("Failure: " ^ msg);
   end;
 
-  Printf.printf "closure call returned: %s\n"
+  Printf.printf "closure call (2) returned: %s\n"
     (test_invoke2 (fun x y ->
       "hello " ^ x ^ ", " ^ y
     ));
+
+  stress_test ();
 ;;

@@ -14,6 +14,8 @@
 
 static PerlInterpreter *my_perl;
 static HV *exn_stash;
+static HV *fun_stash;
+static HV *val_stash;
 
 
 static int indent = 0;
@@ -104,28 +106,9 @@ struct value_info<SV *>::operations
 };
 
 
-static value *
-sv_camlroot (SV *sv)
-{
-  if (sv == &PL_sv_undef)
-    croak ("null pointer");
-
-  if (!SvROK (sv))
-    croak ("no reference");
-
-  sv = SvRV (sv);
-
-  value *root = nullptr;
-  // very important shortcut
-  if (SvMAGIC (sv) && SvMAGIC (sv)->mg_type == PERL_MAGIC_ext)
-    return reinterpret_cast<value *> (SvMAGIC (sv)->mg_ptr);
-
-  else if (MAGIC *mg = mg_find (sv, PERL_MAGIC_ext))
-    return reinterpret_cast<value *> (mg->mg_ptr);
-
-  croak ("perl code used object, but OCaml object is already destroyed");
-}
-
+/*************************************************************
+ * :: Storing OCaml values into Perl SV.
+ *************************************************************/
 
 static MGVTBL value_vtbl = {
   /* get */ 0,
@@ -145,13 +128,12 @@ static MGVTBL value_vtbl = {
 };
 
 static SV *
-sv_of_value (value val)
+sv_of_value (value val, HV *stash = val_stash)
 {
   if (val == Val_unit)
     return &PL_sv_undef;
 
   SV *self = reinterpret_cast<SV *> (newHV ());
-  HV *stash = 0;
 
   /*printf ("SV created: %p\n", self);*/
 
@@ -170,10 +152,44 @@ sv_of_value (value val)
 }
 
 
+/*************************************************************
+ * :: Getting stored OCaml values back out of a Perl SV.
+ *************************************************************/
 
-#define export extern "C" CAMLprim
+static value &
+sv_camlroot (SV *sv)
+{
+  if (sv == &PL_sv_undef)
+    croak ("null pointer");
 
-static int i;
+  if (!SvROK (sv))
+    croak ("no reference");
+
+  if (   !sv_isa (sv, "OCaml::Value")
+      && !sv_isa (sv, "OCaml::Closure")
+      && !sv_isa (sv, "OCaml::Exception"))
+    croak ("expected OCaml value, got %s",
+           sv_pv (sv));
+
+  sv = SvRV (sv);
+
+  value *root = nullptr;
+  // very important shortcut
+  if (SvMAGIC (sv) && SvMAGIC (sv)->mg_type == PERL_MAGIC_ext)
+    return *reinterpret_cast<value *> (SvMAGIC (sv)->mg_ptr);
+
+  else if (MAGIC *mg = mg_find (sv, PERL_MAGIC_ext))
+    return *reinterpret_cast<value *> (mg->mg_ptr);
+
+  croak ("perl code used object, but OCaml object is already destroyed");
+}
+
+
+
+
+/*************************************************************
+ * :: Call named Perl subroutine.
+ *************************************************************/
 
 template<int Flags = G_ARRAY, typename FillArgs, typename OnSuccess>
 static value
@@ -205,7 +221,7 @@ perl_call (char const *name,
       if (sv_isa (ERRSV, "OCaml::Exception"))
         {
           /*printf ("ERRSV = %p = %s\n", ERRSV, sv_pv (ERRSV));*/
-          value exn = *sv_camlroot (ERRSV);
+          value exn = sv_camlroot (ERRSV);
           caml_raise (exn);
         }
       failwith (sv_pv (ERRSV));
@@ -215,7 +231,9 @@ perl_call (char const *name,
 }
 
 
-extern "C" void boot_DynaLoader (pTHX_ CV *cv);
+/*************************************************************
+ * :: Invoke OCaml functional closure from Perl.
+ *************************************************************/
 
 static void
 invoke_closure (pTHX_ CV *cv)
@@ -223,21 +241,23 @@ invoke_closure (pTHX_ CV *cv)
   dVAR;
   dXSARGS;
 
-  if (items < 2)
-    croak_xs_usage (cv, "clos, args...");
+  if (items < 1)
+    croak_xs_usage (cv, "clos, ...");
+
+  SV *clos = ST (0);
+  if (!sv_isa (clos, "OCaml::Closure"))
+    croak ("invoke_closure: expected OCaml functional value, got %s",
+           sv_pv (clos));
 
   std::vector<value> args (items - 1);
   for (int i = 1; i < items; i++)
     args[i - 1] = make_value (newSVsv (ST (i)));
 
-  SV *clos = ST (0);
-
-  value result = caml_callbackN_exn (*sv_camlroot (clos), args.size (), &args[0]);
+  value result = caml_callbackN_exn (sv_camlroot (clos), args.size (), &args[0]);
 
   if (Is_exception_result (result))
     {
-      SV *errsv = sv_of_value (Extract_exception (result));
-      errsv = sv_bless (errsv, exn_stash);
+      SV *errsv = sv_of_value (Extract_exception (result), exn_stash);
       croak_sv (sv_2mortal (errsv));
     }
 
@@ -245,16 +265,28 @@ invoke_closure (pTHX_ CV *cv)
   XSRETURN (1);
 }
 
+
+/*************************************************************
+ * :: Perl interpreter initialisation.
+ *************************************************************/
+
+extern "C" void boot_DynaLoader (pTHX_ CV *cv);
+
 static void
 xs_init (pTHX)
 {
   dXSUB_SYS;
 
   exn_stash = gv_stashpvs ("OCaml::Exception", true);
+  fun_stash = gv_stashpvs ("OCaml::Closure", true);
+  val_stash = gv_stashpvs ("OCaml::Value", true);
 
   newXS ("DynaLoader::boot_DynaLoader", boot_DynaLoader, __FILE__);
   newXSproto ("OCaml::invoke_closure", invoke_closure, __FILE__, "$@");
 }
+
+
+#define export extern "C" CAMLprim
 
 export value
 ml_Perl_init (value vargv)
@@ -295,7 +327,7 @@ ml_Perl_init (value vargv)
     "-e", "",
     "-e", "use common::sense;",
     "-e", "use Data::Dumper;",
-    "-e", "use Test::LeakTrace::Script;",
+    /*"-e", "use Test::LeakTrace::Script;",*/
     "-e", "",
     "-e", "sub say {",
     "-e", "  print \"$_: $_[0] and $_[1]\\n\" for (1 .. $_[2]);",
@@ -308,7 +340,7 @@ ml_Perl_init (value vargv)
     "-e", "}",
     "-e", "",
     "-e", "sub test_invoke1 {",
-    "-e", "  $_[0]->('world')",
+    "-e", "  $_[0]->($_[1])",
     "-e", "}",
     "-e", "",
     "-e", "sub test_invoke2 {",
@@ -337,6 +369,8 @@ ml_Perl_fini ()
   perl_free (my_perl);
   PERL_SYS_TERM ();
 
+  val_stash = nullptr;
+  fun_stash = nullptr;
   exn_stash = nullptr;
   my_perl = nullptr;
 
@@ -344,80 +378,25 @@ ml_Perl_fini ()
 }
 
 
+/*************************************************************
+ * :: Perl's undef scalar, 'a sv on the OCaml side.
+ *************************************************************/
+
 export value
 ml_Perl_undef ()
 {
   return make_value (&PL_sv_undef);
 }
 
-/*************************************************************
- * :: OCaml -> Perl
- *************************************************************/
-
-export value
-ml_Perl_sv_of_value (value val)
-{
-  return make_value (sv_of_value (val));
-}
-
-export value
-ml_Perl_sv_of_char (value val)
-{
-  char str[] = { (char) Int_val (val), '\0' };
-  return make_value (newSVpv (str, 1));
-}
-
-export value
-ml_Perl_sv_of_bool (value val)
-{
-  return make_value (newSViv (Bool_val (val)));
-}
-
-export value
-ml_Perl_sv_of_string (value val)
-{
-  return make_value (newSVpv (String_val (val), caml_string_length (val)));
-}
-
-export value
-ml_Perl_sv_of_float (value val)
-{
-  return make_value (newSVnv (Double_val (val)));
-}
-
-export value
-ml_Perl_sv_of_int (value val)
-{
-  return make_value (newSViv (Int_val (val)));
-}
-
-export value
-ml_Perl_sv_of_nativeint (value val)
-{
-  return make_value (newSViv (Nativeint_val (val)));
-}
-
-export value
-ml_Perl_sv_of_int32 (value val)
-{
-  return make_value (newSViv (Int32_val (val)));
-}
-
-export value
-ml_Perl_sv_of_int64 (value val)
-{
-  return make_value (newSViv (Int64_val (val)));
-}
-
 
 /*************************************************************
- * :: Perl -> OCaml
+ * :: Conversion: Perl -> OCaml
  *************************************************************/
 
 export value
 ml_Perl_value_of_sv (value val)
 {
-  return *sv_camlroot (SV_val (val));
+  return sv_camlroot (SV_val (val));
 }
 
 export value
@@ -435,12 +414,16 @@ ml_Perl_bool_of_sv (value val)
 export value
 ml_Perl_string_of_sv (value val)
 {
+  CAMLparam1 (val);
+  CAMLlocal1 (strval);
+
   STRLEN len;
   char const *str = SvPV (SV_val (val), len);
 
-  value strval = caml_alloc_string (len);
+  strval = caml_alloc_string (len);
   memcpy (String_val (strval), str, len);
-  return strval;
+
+  CAMLreturn (strval);
 }
 
 export value
@@ -471,6 +454,71 @@ export value
 ml_Perl_int64_of_sv (value val)
 {
   return caml_copy_int64 (SvIV (SV_val (val)));
+}
+
+
+/*************************************************************
+ * :: Conversion: OCaml -> Perl
+ *************************************************************/
+
+export value
+ml_Perl_sv_of_value (value val)
+{
+  return make_value (sv_of_value (val));
+}
+
+export value
+ml_Perl_sv_of_char (value val)
+{
+  char str[] = { (char) Int_val (val), '\0' };
+  return make_value (newSVpv (str, 1));
+}
+
+export value
+ml_Perl_sv_of_bool (value val)
+{
+  return make_value (newSViv (Bool_val (val)));
+}
+
+export value
+ml_Perl_sv_of_string (value val)
+{
+  CAMLparam1 (val);
+  CAMLlocal1 (retval);
+
+  retval = make_value (newSVpv (String_val (val), caml_string_length (val)));
+
+  CAMLreturn (retval);
+}
+
+export value
+ml_Perl_sv_of_float (value val)
+{
+  return make_value (newSVnv (Double_val (val)));
+}
+
+export value
+ml_Perl_sv_of_int (value val)
+{
+  return make_value (newSViv (Int_val (val)));
+}
+
+export value
+ml_Perl_sv_of_nativeint (value val)
+{
+  return make_value (newSViv (Nativeint_val (val)));
+}
+
+export value
+ml_Perl_sv_of_int32 (value val)
+{
+  return make_value (newSViv (Int32_val (val)));
+}
+
+export value
+ml_Perl_sv_of_int64 (value val)
+{
+  return make_value (newSViv (Int64_val (val)));
 }
 
 
@@ -531,7 +579,7 @@ ml_Perl_call (value name, value args)
 
 
 /*************************************************************
- * :: Calling OCaml code from Perl.
+ * :: Create Perl object for OCaml functional value.
  *************************************************************/
 
 export value
@@ -544,7 +592,7 @@ ml_Perl_sv_of_fun (value argc, value closure)
     // fill_args
     [argc, &closure] (SV **sp) {
       XPUSHs (sv_2mortal (newSViv (Int_val (argc))));
-      XPUSHs (sv_2mortal (sv_of_value (closure)));
+      XPUSHs (sv_2mortal (sv_of_value (closure, fun_stash)));
       return sp;
     },
 
