@@ -2,6 +2,8 @@
 
 These are some bindings of OCaml and Perl in the style of C<ctypes>.
 
+L<Git repository|https://github.com/pippijn/perltypes>
+
 
 =head2 Example
 
