@@ -37,7 +37,8 @@ external int64_of_sv	: int64 sv	-> int64	= "ml_Perl_int64_of_sv"
 
 external call : string -> 'a sv list -> 'b sv list = "ml_Perl_call"
 
-external sv_of_fun1 : ('a sv -> 'b sv) -> ('a -> 'b) sv = "ml_Perl_sv_of_fun1"
+external sv_of_fun1 : ('a sv -> 'b sv) -> ('a -> 'b) sv = "ml_Perl_sv_of_fun"
+external sv_of_fun2 : ('a sv -> 'b sv -> 'c sv) -> ('a -> 'b -> 'c) sv = "ml_Perl_sv_of_fun"
 
 
 module Foreign : sig
@@ -98,10 +99,15 @@ end = struct
 
 
   let rec to_sv : type a. a fn -> a -> a sv = function
-    | Function (arg, ret) ->
+    | Function (arg1, Function (arg2, ret)) ->
         fun fn ->
-          sv_of_fun1 (fun s ->
-            to_sv ret (fn (sv_to arg s))
+          sv_of_fun2 (fun a1 a2 ->
+            to_sv ret (fn (sv_to arg1 a1) (sv_to arg2 a2))
+          )
+    | Function (arg1, ret) ->
+        fun fn ->
+          sv_of_fun1 (fun a1 ->
+            to_sv ret (fn (sv_to arg1 a1))
           )
     | Tuple (a, b) -> failwith "Tuple"
     | Primitive (to_sv, sv_to) -> to_sv

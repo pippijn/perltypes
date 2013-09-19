@@ -222,7 +222,7 @@ ml_Perl_init (value vargv)
     "-e", "}",
     "-e", "",
     "-e", "sub test_invoke2 {",
-    "-e", "  $_[0]->('world')->('hehe')",
+    "-e", "  $_[0]->('world', 'hehe')",
     "-e", "}",
     0
   };
@@ -482,7 +482,7 @@ ml_Perl_call (value name, value args)
  *************************************************************/
 
 export value
-ml_Perl_sv_of_fun1 (value closure)
+ml_Perl_sv_of_fun (value closure)
 {
   CAMLparam1 (closure);
 
