@@ -12,6 +12,31 @@
 #include <caml/memory.h>
 #include <caml/mlvalues.h>
 
+static PerlInterpreter *my_perl;
+static HV *exn_stash;
+
+
+static int indent = 0;
+
+struct trace
+{
+  trace (char const *func, int line)
+    : func (func), line (line)
+  {
+    printf ("%*s>> %s (%d)\n", indent++, "", func, line);
+  }
+
+  ~trace ()
+  {
+    printf ("%*s<< %s (%d)\n", --indent, "", func, line);
+  }
+
+  char const *func;
+  int line;
+};
+
+#define TRACE trace _t (__func__, __LINE__)
+
 
 // Creates a function declaration of a function returning a reference to an
 // array of N chars. Its return value size is therefore N, which can be used
@@ -62,41 +87,7 @@ make_value (T const &v)
   CAMLreturn (val);
 }
 
-#define export extern "C" CAMLprim
 #define SV_val value_cast<SV *>
-
-static PerlInterpreter *my_perl;
-
-template<int Flags = G_ARRAY, typename FillArgs, typename OnSuccess>
-static value
-perl_call (char const *name,
-           FillArgs fill_args,
-           OnSuccess on_success)
-{
-  dSP;
-  ENTER;
-  SAVETMPS;
-  PUSHMARK (SP);
-
-  SP = fill_args (SP);
-
-  PUTBACK;
-  int count = call_pv (name, Flags | G_EVAL);
-  SPAGAIN;
-
-  value retval;
-  if (!SvTRUE (ERRSV))
-    retval = on_success (SP, count);
-
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  if (SvTRUE (ERRSV))
-    failwith (SvPV_nolen (ERRSV));
-
-  return retval;
-}
 
 
 template<>
@@ -136,6 +127,94 @@ sv_camlroot (SV *sv)
 }
 
 
+static MGVTBL value_vtbl = {
+  /* get */ 0,
+  /* set */ 0,
+  /* len */ 0,
+  /* clear */ 0,
+  /* free */ [] (pTHX_ SV *sv, MAGIC *mg) {
+    value *root = reinterpret_cast<value *> (mg->mg_ptr);
+    caml_remove_generational_global_root (root);
+    delete root;
+
+    return 0;
+  },
+  /* copy */ 0,
+  /* dup */ 0,
+  /* local */ 0,
+};
+
+static SV *
+sv_of_value (value val)
+{
+  if (val == Val_unit)
+    return &PL_sv_undef;
+
+  SV *self = reinterpret_cast<SV *> (newHV ());
+  HV *stash = 0;
+
+  /*printf ("SV created: %p\n", self);*/
+
+  value *root = new value (val);
+  caml_register_generational_global_root (root);
+
+  sv_magicext (self, 0, PERL_MAGIC_ext, &value_vtbl, (char *)root, 0);
+  if (!SvROK (self))
+    self = newRV_noinc (self);
+  if (stash)
+    self = sv_bless (self, stash);
+
+  /*printf ("RV created: %p -> %s\n", self, sv_pv (self));*/
+
+  return self;
+}
+
+
+
+#define export extern "C" CAMLprim
+
+static int i;
+
+template<int Flags = G_ARRAY, typename FillArgs, typename OnSuccess>
+static value
+perl_call (char const *name,
+           FillArgs fill_args,
+           OnSuccess on_success)
+{
+  dSP;
+  ENTER;
+  SAVETMPS;
+  PUSHMARK (SP);
+
+  SP = fill_args (SP);
+
+  PUTBACK;
+  int count = call_pv (name, Flags | G_EVAL);
+  SPAGAIN;
+
+  value retval;
+  if (!SvTRUE (ERRSV))
+    retval = on_success (SP, count);
+
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (SvTRUE (ERRSV))
+    {
+      if (sv_isa (ERRSV, "OCaml::Exception"))
+        {
+          /*printf ("ERRSV = %p = %s\n", ERRSV, sv_pv (ERRSV));*/
+          value exn = *sv_camlroot (ERRSV);
+          caml_raise (exn);
+        }
+      failwith (sv_pv (ERRSV));
+    }
+
+  return retval;
+}
+
+
 extern "C" void boot_DynaLoader (pTHX_ CV *cv);
 
 static void
@@ -153,7 +232,14 @@ invoke_closure (pTHX_ CV *cv)
 
   SV *clos = ST (0);
 
-  value result = caml_callbackN (*sv_camlroot (clos), args.size (), &args[0]);
+  value result = caml_callbackN_exn (*sv_camlroot (clos), args.size (), &args[0]);
+
+  if (Is_exception_result (result))
+    {
+      SV *errsv = sv_of_value (Extract_exception (result));
+      errsv = sv_bless (errsv, exn_stash);
+      croak_sv (sv_2mortal (errsv));
+    }
 
   ST (0) = SV_val (result);
   XSRETURN (1);
@@ -163,6 +249,8 @@ static void
 xs_init (pTHX)
 {
   dXSUB_SYS;
+
+  exn_stash = gv_stashpvs ("OCaml::Exception", true);
 
   newXS ("DynaLoader::boot_DynaLoader", boot_DynaLoader, __FILE__);
   newXSproto ("OCaml::invoke_closure", invoke_closure, __FILE__, "$@");
@@ -202,7 +290,7 @@ ml_Perl_init (value vargv)
     "-e", "    invoke_closure $clos, @_",
     "-e", "  }",
     "-e", "}",
-
+    "-e", "",
     "-e", "package main;",
     "-e", "",
     "-e", "use common::sense;",
@@ -234,7 +322,7 @@ ml_Perl_init (value vargv)
     failwith ("unable to initialise perl interpreter");
 
   if (SvTRUE (ERRSV))
-    failwith (SvPV_nolen (ERRSV));
+    failwith (sv_pv (ERRSV));
 
   return Val_unit;
 }
@@ -249,6 +337,7 @@ ml_Perl_fini ()
   perl_free (my_perl);
   PERL_SYS_TERM ();
 
+  exn_stash = nullptr;
   my_perl = nullptr;
 
   return Val_unit;
@@ -264,44 +353,6 @@ ml_Perl_undef ()
 /*************************************************************
  * :: OCaml -> Perl
  *************************************************************/
-
-static MGVTBL value_vtbl = {
-  /* get */ 0,
-  /* set */ 0,
-  /* len */ 0,
-  /* clear */ 0,
-  /* free */ [] (pTHX_ SV *sv, MAGIC *mg) {
-    value *root = reinterpret_cast<value *> (mg->mg_ptr);
-    remove_global_root (root);
-    delete root;
-
-    return 0;
-  },
-  /* copy */ 0,
-  /* dup */ 0,
-  /* local */ 0,
-};
-
-static SV *
-sv_of_value (value val)
-{
-  if (val == Val_unit)
-    return &PL_sv_undef;
-
-  SV *self = reinterpret_cast<SV *> (newHV ());
-  HV *stash = 0;
-
-  value *root = new value (val);
-  register_global_root (root);
-
-  sv_magicext (self, 0, PERL_MAGIC_ext, &value_vtbl, (char *)root, 0);
-  if (!SvROK (self))
-    self = newRV_noinc (self);
-  if (stash)
-    self = sv_bless (self, stash);
-
-  return self;
-}
 
 export value
 ml_Perl_sv_of_value (value val)
@@ -372,7 +423,7 @@ ml_Perl_value_of_sv (value val)
 export value
 ml_Perl_char_of_sv (value val)
 {
-  return Val_int (SvPV_nolen (SV_val (val))[0]);
+  return Val_int (sv_pv (SV_val (val))[0]);
 }
 
 export value

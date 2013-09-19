@@ -175,6 +175,16 @@ let () =
       "hello " ^ x
     ));
 
+  begin try
+    Printf.printf "closure call returned: %s\n"
+      (test_invoke1 (fun x ->
+        failwith ("thrown from closure: hello " ^ x)
+      ));
+    assert false;
+  with Failure msg ->
+    print_endline ("Failure: " ^ msg);
+  end;
+
   Printf.printf "closure call returned: %s\n"
     (test_invoke2 (fun x y ->
       "hello " ^ x ^ ", " ^ y
