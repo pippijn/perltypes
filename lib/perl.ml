@@ -45,6 +45,8 @@ module Foreign : sig
 
   type 'a fn
 
+  val make_type : ('a -> 'a sv) -> ('a sv -> 'a) -> 'a fn
+
   val char	: char fn
   val bool	: bool fn
   val string	: string fn
@@ -62,22 +64,26 @@ module Foreign : sig
 end = struct
 
   type _ fn =
-    | Function : 'a fn * 'b fn -> ('a -> 'b) fn
-    | Tuple : 'a fn * 'b fn -> ('a * 'b) fn
+    | Function  : 'a fn * 'b fn -> ('a -> 'b) fn
+    | Tuple     : 'a fn * 'b fn -> ('a * 'b) fn
     | Primitive : ('a -> 'a sv) * ('a sv -> 'a) -> 'a fn
 
   type _ sp =
     | Nil : unit sp
     | Cons : 'a sv * 'b sp -> ('a -> 'b) sp
 
-  let char	= Primitive (sv_of_char,	char_of_sv	)
-  let bool	= Primitive (sv_of_bool,	bool_of_sv	)
-  let string	= Primitive (sv_of_string,	string_of_sv	)
-  let float	= Primitive (sv_of_float,	float_of_sv	)
-  let int	= Primitive (sv_of_int,		int_of_sv	)
-  let nativeint	= Primitive (sv_of_nativeint,	nativeint_of_sv	)
-  let int32	= Primitive (sv_of_int32,	int32_of_sv	)
-  let int64	= Primitive (sv_of_int64,	int64_of_sv	)
+
+  let make_type to_sv sv_to =
+    Primitive (to_sv, sv_to)
+
+  let char	= make_type sv_of_char		char_of_sv
+  let bool	= make_type sv_of_bool		bool_of_sv
+  let string	= make_type sv_of_string	string_of_sv
+  let float	= make_type sv_of_float		float_of_sv
+  let int	= make_type sv_of_int		int_of_sv
+  let nativeint	= make_type sv_of_nativeint	nativeint_of_sv
+  let int32	= make_type sv_of_int32		int32_of_sv
+  let int64	= make_type sv_of_int64		int64_of_sv
 
   let ( @-> ) a b = Function (a, b)
   let ( @* ) a b = Tuple (a, b)
