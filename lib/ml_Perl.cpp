@@ -147,9 +147,9 @@ invoke_closure (pTHX_ CV *cv)
   if (items < 2)
     croak_xs_usage (cv, "clos, args...");
 
-  std::vector<value> args;
+  std::vector<value> args (items - 1);
   for (int i = 1; i < items; i++)
-    args.push_back (make_value (newSVsv (ST (i))));
+    args[i - 1] = make_value (newSVsv (ST (i)));
 
   SV *clos = ST (0);
 
