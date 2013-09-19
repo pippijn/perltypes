@@ -44,9 +44,14 @@ module Foreign : sig
 
   type 'a fn
 
-  val int : int fn
-  val string : string fn
-  val float : float fn
+  val char	: char fn
+  val bool	: bool fn
+  val string	: string fn
+  val float	: float fn
+  val int	: int fn
+  val nativeint	: nativeint fn
+  val int32	: int32 fn
+  val int64	: int64 fn
 
   val ( @-> ) : 'a fn -> 'b fn -> ('a -> 'b) fn
   val ( @* ) : 'a fn -> 'b fn -> ('a * 'b) fn
@@ -58,17 +63,20 @@ end = struct
   type _ fn =
     | Function : 'a fn * 'b fn -> ('a -> 'b) fn
     | Tuple : 'a fn * 'b fn -> ('a * 'b) fn
-    | Int : int fn
-    | Float : float fn
-    | String : string fn
+    | Primitive : ('a -> 'a sv) * ('a sv -> 'a) -> 'a fn
 
   type _ sp =
     | Nil : unit sp
     | Cons : 'a sv * 'b sp -> ('a * 'b) sp
 
-  let int = Int
-  let float = Float
-  let string = String
+  let char	= Primitive (sv_of_char,	char_of_sv	)
+  let bool	= Primitive (sv_of_bool,	bool_of_sv	)
+  let string	= Primitive (sv_of_string,	string_of_sv	)
+  let float	= Primitive (sv_of_float,	float_of_sv	)
+  let int	= Primitive (sv_of_int,		int_of_sv	)
+  let nativeint	= Primitive (sv_of_nativeint,	nativeint_of_sv	)
+  let int32	= Primitive (sv_of_int32,	int32_of_sv	)
+  let int64	= Primitive (sv_of_int64,	int64_of_sv	)
 
   let ( @-> ) a b = Function (a, b)
   let ( @* ) a b = Tuple (a, b)
@@ -80,25 +88,23 @@ end = struct
     | Tuple (a, b) ->
         Printf.sprintf "Tuple (%a, %a)"
           print_fn a print_fn b
-    | Int -> "Int"
-    | Float -> "Float"
-    | String -> "String"
-
-
-  let rec to_sv : type a. a fn -> a -> a sv = function
-    | Function (a, b) -> failwith "Function"
-    | Tuple (a, b) -> failwith "Tuple"
-    | Int -> sv_of_int
-    | Float -> sv_of_float
-    | String -> sv_of_string
+    | Primitive _ -> "Primitive"
 
 
   let sv_to : type a. a fn -> a sv -> a = function
     | Function (a, b) -> failwith "Function"
     | Tuple (a, b) -> failwith "Tuple"
-    | Int -> int_of_sv
-    | Float -> float_of_sv
-    | String -> string_of_sv
+    | Primitive (to_sv, sv_to) -> sv_to
+
+
+  let rec to_sv : type a. a fn -> a -> a sv = function
+    | Function (arg, ret) ->
+        fun fn ->
+          sv_of_fun1 (fun s ->
+            to_sv ret (fn (sv_to arg s))
+          )
+    | Tuple (a, b) -> failwith "Tuple"
+    | Primitive (to_sv, sv_to) -> to_sv
 
 
   external call : string -> 'a sp -> 'b sp = "ml_Perl_call"
@@ -137,10 +143,7 @@ end = struct
 
 end
 
-
-let say = Foreign.(foreign "say" (string @-> float @-> int @-> int));;
-Printf.printf "return %d\n" (say "hello" 123.456 3);;
-
+(* old stuff *)
 let stuff msg =
   match call "stuff" [sv_of_string msg] with
   | results -> List.map string_of_sv results
@@ -153,4 +156,31 @@ let test_invoke fn =
     )
   in
 
-  List.map string_of_sv (call "test_invoke" [fn]);
+  List.map string_of_sv (call "test_invoke1" [fn])
+
+
+(* new stuff using Foreign *)
+let say =
+  Foreign.(foreign "say" (string @-> float @-> int @-> int))
+
+let test_invoke1 =
+  Foreign.(foreign "test_invoke1" ((string @-> string) @-> string))
+
+let test_invoke2 =
+  Foreign.(foreign "test_invoke2" ((string @-> string @-> string) @-> string))
+
+
+let () =
+  Printf.printf "say returned %d\n"
+    (say "hello" 123.456 3);
+
+  Printf.printf "closure call returned: %s\n"
+    (test_invoke1 (fun x ->
+      "hello " ^ x
+    ));
+
+  Printf.printf "closure call returned: %s\n"
+    (test_invoke2 (fun x y ->
+      "hello " ^ x ^ ", " ^ y
+    ));
+;;

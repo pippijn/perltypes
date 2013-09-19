@@ -12,6 +12,7 @@
 #include <caml/memory.h>
 #include <caml/mlvalues.h>
 
+
 // Creates a function declaration of a function returning a reference to an
 // array of N chars. Its return value size is therefore N, which can be used
 // in the array_size macro to ensure that it returns a compile-time constant.
@@ -107,8 +108,7 @@ struct value_info<SV *>::operations
   static void finalize (value vsv) {
     if (!my_perl)
       failwith ("OCaml code used object, but Perl interpreter is already destroyed");
-    SV *sv = SV_val (vsv);
-    SvREFCNT_dec (sv);
+    SvREFCNT_dec (SV_val (vsv));
   }
 };
 
@@ -144,13 +144,16 @@ invoke_closure (pTHX_ CV *cv)
   dVAR;
   dXSARGS;
 
-  if (items != 2)
-    croak_xs_usage (cv, "clos, arg");
+  if (items < 2)
+    croak_xs_usage (cv, "clos, args...");
+
+  std::vector<value> args;
+  for (int i = 1; i < items; i++)
+    args.push_back (make_value (newSVsv (ST (i))));
 
   SV *clos = ST (0);
-  SV *arg  = ST (1);
 
-  value result = caml_callback (*sv_camlroot (clos), make_value (arg));
+  value result = caml_callbackN (*sv_camlroot (clos), args.size (), &args[0]);
 
   ST (0) = SV_val (result);
   XSRETURN (1);
@@ -187,25 +190,39 @@ ml_Perl_init (value vargv)
   // Start interpreter.
   char const *embedding[] = {
     argv[0],
+    "-e", "package OCaml;",
+    "-e", "",
+    "-e", "use common::sense;",
+    "-e", "",
+    "-e", "sub make_closure {",
+    "-e", "  my $clos = shift;",
+    "-e", "  sub {",
+    "-e", "    invoke_closure $clos, @_",
+    "-e", "  }",
+    "-e", "}",
+
+    "-e", "package main;",
+    "-e", "",
     "-e", "use common::sense;",
     "-e", "use Data::Dumper;",
     "-e", "use Test::LeakTrace::Script;",
+    "-e", "",
     "-e", "sub say {",
     "-e", "  print \"$_: $_[0] and $_[1]\\n\" for (1 .. $_[2]);",
     "-e", "  300",
     "-e", "}",
+    "-e", "",
     "-e", "sub stuff {",
     "-e", "  print @_, \"\\n\";",
     "-e", "  (1, 2, '3 apples', @_)",
     "-e", "}",
-    "-e", "sub make_closure {",
-    "-e", "  my $clos = shift;",
-    "-e", "  sub {",
-    "-e", "    OCaml::invoke_closure $clos, @_",
-    "-e", "  }",
-    "-e", "}",
-    "-e", "sub test_invoke {",
+    "-e", "",
+    "-e", "sub test_invoke1 {",
     "-e", "  $_[0]->('world')",
+    "-e", "}",
+    "-e", "",
+    "-e", "sub test_invoke2 {",
+    "-e", "  $_[0]->('world')->('hehe')",
     "-e", "}",
     0
   };
@@ -470,7 +487,7 @@ ml_Perl_sv_of_fun1 (value closure)
 {
   CAMLparam1 (closure);
 
-  CAMLreturn (perl_call<G_SCALAR> ("make_closure",
+  CAMLreturn (perl_call<G_SCALAR> ("OCaml::make_closure",
 
     // fill_args
     [&closure] (SV **sp) {
