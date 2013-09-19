@@ -195,8 +195,10 @@ ml_Perl_init (value vargv)
     "-e", "use common::sense;",
     "-e", "",
     "-e", "sub make_closure {",
-    "-e", "  my $clos = shift;",
+    "-e", "  my ($argc, $clos) = @_;",
     "-e", "  sub {",
+    "-e", "    die \"expected $argc args, got \" . scalar @_",
+    "-e", "       if @_ != $argc;",
     "-e", "    invoke_closure $clos, @_",
     "-e", "  }",
     "-e", "}",
@@ -482,14 +484,15 @@ ml_Perl_call (value name, value args)
  *************************************************************/
 
 export value
-ml_Perl_sv_of_fun (value closure)
+ml_Perl_sv_of_fun (value argc, value closure)
 {
   CAMLparam1 (closure);
 
   CAMLreturn (perl_call<G_SCALAR> ("OCaml::make_closure",
 
     // fill_args
-    [&closure] (SV **sp) {
+    [argc, &closure] (SV **sp) {
+      XPUSHs (sv_2mortal (newSViv (Int_val (argc))));
       XPUSHs (sv_2mortal (sv_of_value (closure)));
       return sp;
     },
