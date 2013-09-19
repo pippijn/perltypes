@@ -11,7 +11,8 @@ Perl code:
 
 ```perl
 sub say {
-  print "$_: $_[0] and $_[1]\n" for (1 .. $_[2]);
+  print "$_: $_[0] and $_[1]\n"
+     for 1 .. $_[2];
   300
 }
 
@@ -34,13 +35,13 @@ OCaml code:
 ```ocaml
 (* new stuff using Foreign *)
 let say =
-  Foreign.(foreign "say" (string @-> float @-> int @-> int))
+  Perl.Foreign.(foreign "say" (string @-> float @-> int @-> int))
 
 let test_invoke1 =
-  Foreign.(foreign "test_invoke1" ((string @-> string) @-> string))
+  Perl.Foreign.(foreign "test_invoke1" ((string @-> string) @-> string))
 
 let test_invoke2 =
-  Foreign.(foreign "test_invoke2" ((string @-> string @-> string) @-> string))
+  Perl.Foreign.(foreign "test_invoke2" ((string @-> string @-> string) @-> string))
 
 
 let () =
