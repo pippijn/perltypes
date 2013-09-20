@@ -195,11 +195,11 @@ let stress_test () =
 
     let local_start = Unix.gettimeofday () in
     for j = 1 to n do
-      assert (invoke_char (fun x -> Char.chr (Char.code x + 1)) 'a' = 'b');
+      assert (invoke_char Char.uppercase 'a' = 'A');
       assert (invoke_bool not true = false);
       assert (invoke_string (fun x -> "hello " ^ x) "world" = "hello world");
-      assert (invoke_float (fun x -> x *. 2.0) 64.0 = 128.0);
-      assert (invoke_int (fun x -> x * 2) 64 = 128);
+      assert (invoke_float ((+.) 64.0) 64.0 = 128.0);
+      assert (invoke_int ((+) 64) 64 = 128);
       assert (invoke_nativeint Nativeint.succ n64 = n65);
       assert (invoke_int32 Int32.succ 64l = 65l);
       assert (invoke_int64 Int64.succ 64L = 65L);
