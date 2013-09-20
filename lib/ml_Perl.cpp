@@ -12,10 +12,16 @@
 #include <caml/memory.h>
 #include <caml/mlvalues.h>
 
+struct stash
+{
+  char const *const pkg;
+  HV *hv;
+};
+
 static PerlInterpreter *my_perl;
-static HV *exn_stash;
-static HV *fun_stash;
-static HV *val_stash;
+static stash exn_stash = { "OCaml::Exception" };
+static stash fun_stash = { "OCaml::Closure" };
+static stash val_stash = { "OCaml::Value" };
 
 
 static int indent = 0;
@@ -128,19 +134,20 @@ static MGVTBL value_vtbl = {
 };
 
 static SV *
-sv_of_value (value val, HV *stash = val_stash)
+sv_of_value (value val, HV *stash = val_stash.hv)
 {
   if (val == Val_unit)
     return &PL_sv_undef;
 
-  SV *self = reinterpret_cast<SV *> (newHV ());
+  SV *self = newSV (0);
 
   /*printf ("SV created: %p\n", self);*/
 
   value *root = new value (val);
   caml_register_generational_global_root (root);
 
-  sv_magicext (self, 0, PERL_MAGIC_ext, &value_vtbl, (char *)root, 0);
+  sv_magicext (self, 0, PERL_MAGIC_ext, &value_vtbl,
+               reinterpret_cast<char const *> (root), 0);
   if (!SvROK (self))
     self = newRV_noinc (self);
   if (stash)
@@ -160,15 +167,17 @@ static value &
 sv_camlroot (SV *sv)
 {
   if (sv == &PL_sv_undef)
+    // XXX: this function should use caml_failwith
+    // when the callee is ocaml code
     croak ("null pointer");
 
   if (!SvROK (sv))
     croak ("no reference");
 
-  if (   !sv_isa (sv, "OCaml::Value")
-      && !sv_isa (sv, "OCaml::Closure")
-      && !sv_isa (sv, "OCaml::Exception"))
-    croak ("expected OCaml value, got %s",
+  if (   !sv_isa (sv, val_stash.pkg)
+      && !sv_isa (sv, fun_stash.pkg)
+      && !sv_isa (sv, exn_stash.pkg))
+    croak ("expected OCaml value, got '%s'",
            sv_pv (sv));
 
   sv = SvRV (sv);
@@ -218,7 +227,7 @@ perl_call (char const *name,
 
   if (SvTRUE (ERRSV))
     {
-      if (sv_isa (ERRSV, "OCaml::Exception"))
+      if (sv_isa (ERRSV, exn_stash.pkg))
         {
           /*printf ("ERRSV = %p = %s\n", ERRSV, sv_pv (ERRSV));*/
           value exn = sv_camlroot (ERRSV);
@@ -245,8 +254,8 @@ invoke_closure (pTHX_ CV *cv)
     croak_xs_usage (cv, "clos, ...");
 
   SV *clos = ST (0);
-  if (!sv_isa (clos, "OCaml::Closure"))
-    croak ("invoke_closure: expected OCaml functional value, got %s",
+  if (!sv_isa (clos, fun_stash.pkg))
+    croak ("invoke_closure: expected OCaml functional value, got '%s'",
            sv_pv (clos));
 
   std::vector<value> args (items - 1);
@@ -257,7 +266,7 @@ invoke_closure (pTHX_ CV *cv)
 
   if (Is_exception_result (result))
     {
-      SV *errsv = sv_of_value (Extract_exception (result), exn_stash);
+      SV *errsv = sv_of_value (Extract_exception (result), exn_stash.hv);
       croak_sv (sv_2mortal (errsv));
     }
 
@@ -277,9 +286,9 @@ xs_init (pTHX)
 {
   dXSUB_SYS;
 
-  exn_stash = gv_stashpvs ("OCaml::Exception", true);
-  fun_stash = gv_stashpvs ("OCaml::Closure", true);
-  val_stash = gv_stashpvs ("OCaml::Value", true);
+  exn_stash.hv = gv_stashpvn (exn_stash.pkg, strlen (exn_stash.pkg), true);
+  fun_stash.hv = gv_stashpvn (fun_stash.pkg, strlen (fun_stash.pkg), true);
+  val_stash.hv = gv_stashpvn (val_stash.pkg, strlen (val_stash.pkg), true);
 
   newXS ("DynaLoader::boot_DynaLoader", boot_DynaLoader, __FILE__);
   newXSproto ("OCaml::invoke_closure", invoke_closure, __FILE__, "$@");
@@ -291,6 +300,7 @@ xs_init (pTHX)
 export value
 ml_Perl_init (value vargv)
 {
+  assert (!my_perl);
   if (my_perl)
     return Val_unit;
 
@@ -349,7 +359,8 @@ ml_Perl_init (value vargv)
     0
   };
 
-  if (perl_parse (my_perl, xs_init, array_size (embedding) - 1, const_cast<char **> (embedding), nullptr)
+  if (perl_parse (my_perl, xs_init, array_size (embedding) - 1,
+                  const_cast<char **> (embedding), nullptr)
       || perl_run (my_perl))
     failwith ("unable to initialise perl interpreter");
 
@@ -362,6 +373,7 @@ ml_Perl_init (value vargv)
 export value
 ml_Perl_fini ()
 {
+  assert (my_perl);
   if (!my_perl)
     return Val_unit;
 
@@ -369,9 +381,9 @@ ml_Perl_fini ()
   perl_free (my_perl);
   PERL_SYS_TERM ();
 
-  val_stash = nullptr;
-  fun_stash = nullptr;
-  exn_stash = nullptr;
+  val_stash.hv = nullptr;
+  fun_stash.hv = nullptr;
+  exn_stash.hv = nullptr;
   my_perl = nullptr;
 
   return Val_unit;
@@ -385,6 +397,7 @@ ml_Perl_fini ()
 export value
 ml_Perl_undef ()
 {
+  assert (my_perl);
   return make_value (&PL_sv_undef);
 }
 
@@ -396,24 +409,28 @@ ml_Perl_undef ()
 export value
 ml_Perl_value_of_sv (value val)
 {
+  assert (my_perl);
   return sv_camlroot (SV_val (val));
 }
 
 export value
 ml_Perl_char_of_sv (value val)
 {
+  assert (my_perl);
   return Val_int (sv_pv (SV_val (val))[0]);
 }
 
 export value
 ml_Perl_bool_of_sv (value val)
 {
+  assert (my_perl);
   return Val_bool (SvIV (SV_val (val)));
 }
 
 export value
 ml_Perl_string_of_sv (value val)
 {
+  assert (my_perl);
   CAMLparam1 (val);
   CAMLlocal1 (strval);
 
@@ -429,30 +446,35 @@ ml_Perl_string_of_sv (value val)
 export value
 ml_Perl_float_of_sv (value val)
 {
+  assert (my_perl);
   return caml_copy_double (SvNV (SV_val (val)));
 }
 
 export value
 ml_Perl_int_of_sv (value val)
 {
+  assert (my_perl);
   return Val_int (SvIV (SV_val (val)));
 }
 
 export value
 ml_Perl_nativeint_of_sv (value val)
 {
+  assert (my_perl);
   return caml_copy_nativeint (SvIV (SV_val (val)));
 }
 
 export value
 ml_Perl_int32_of_sv (value val)
 {
+  assert (my_perl);
   return caml_copy_int32 (SvIV (SV_val (val)));
 }
 
 export value
 ml_Perl_int64_of_sv (value val)
 {
+  assert (my_perl);
   return caml_copy_int64 (SvIV (SV_val (val)));
 }
 
@@ -464,12 +486,14 @@ ml_Perl_int64_of_sv (value val)
 export value
 ml_Perl_sv_of_value (value val)
 {
+  assert (my_perl);
   return make_value (sv_of_value (val));
 }
 
 export value
 ml_Perl_sv_of_char (value val)
 {
+  assert (my_perl);
   char str[] = { (char) Int_val (val), '\0' };
   return make_value (newSVpv (str, 1));
 }
@@ -477,12 +501,14 @@ ml_Perl_sv_of_char (value val)
 export value
 ml_Perl_sv_of_bool (value val)
 {
+  assert (my_perl);
   return make_value (newSViv (Bool_val (val)));
 }
 
 export value
 ml_Perl_sv_of_string (value val)
 {
+  assert (my_perl);
   CAMLparam1 (val);
   CAMLlocal1 (retval);
 
@@ -494,30 +520,35 @@ ml_Perl_sv_of_string (value val)
 export value
 ml_Perl_sv_of_float (value val)
 {
+  assert (my_perl);
   return make_value (newSVnv (Double_val (val)));
 }
 
 export value
 ml_Perl_sv_of_int (value val)
 {
+  assert (my_perl);
   return make_value (newSViv (Int_val (val)));
 }
 
 export value
 ml_Perl_sv_of_nativeint (value val)
 {
+  assert (my_perl);
   return make_value (newSViv (Nativeint_val (val)));
 }
 
 export value
 ml_Perl_sv_of_int32 (value val)
 {
+  assert (my_perl);
   return make_value (newSViv (Int32_val (val)));
 }
 
 export value
 ml_Perl_sv_of_int64 (value val)
 {
+  assert (my_perl);
   return make_value (newSViv (Int64_val (val)));
 }
 
@@ -541,6 +572,7 @@ list_length (value list)
 export value
 ml_Perl_call (value name, value args)
 {
+  assert (my_perl);
   CAMLparam2 (name, args);
   CAMLlocal2 (retval, cons);
 
@@ -585,6 +617,7 @@ ml_Perl_call (value name, value args)
 export value
 ml_Perl_sv_of_fun (value argc, value closure)
 {
+  assert (my_perl);
   CAMLparam1 (closure);
 
   CAMLreturn (perl_call<G_SCALAR> ("OCaml::make_closure",
@@ -592,7 +625,7 @@ ml_Perl_sv_of_fun (value argc, value closure)
     // fill_args
     [argc, &closure] (SV **sp) {
       XPUSHs (sv_2mortal (newSViv (Int_val (argc))));
-      XPUSHs (sv_2mortal (sv_of_value (closure, fun_stash)));
+      XPUSHs (sv_2mortal (sv_of_value (closure, fun_stash.hv)));
       return sp;
     },
 
