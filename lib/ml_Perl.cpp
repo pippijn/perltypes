@@ -276,7 +276,7 @@ invoke_closure (pTHX_ CV *cv)
 
 
 /*************************************************************
- * :: Perl interpreter initialisation.
+ * :: Perl interpreter initialisation/destruction.
  *************************************************************/
 
 extern "C" void boot_DynaLoader (pTHX_ CV *cv);

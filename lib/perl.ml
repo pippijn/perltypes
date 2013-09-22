@@ -218,6 +218,8 @@ let stress_test () =
       call_count
       (total_time /. float call_count);
     flush stdout;
+
+    continue := total_time < 60.0;
   done;
 ;;
 
