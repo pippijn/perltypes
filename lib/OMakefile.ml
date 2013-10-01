@@ -1,6 +1,6 @@
 install Library ".DEFAULT" [
   (* Target *)
-  Name		"perl";
+  Name		"perltypes";
   Description	"OCaml Perl interface";
   Version	"0.1";
 

@@ -1,3 +1,3 @@
-OCaml-Requires = perl
+OCaml-Requires = perltypes
 
 testsuite (perl)
