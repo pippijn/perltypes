@@ -1,0 +1,21 @@
+Name = perltypes
+Description = OCaml Perl interface
+Version = 0.1
+
+OCaml-Sources[] =
+  Perl
+
+C-Sources[] =
+  ml_Perl.cpp
+
+OCaml-Requires[] =
+  sexplib.syntax
+
+Flags. +=
+  $|perl.ml|		= -syntax camlp4o
+
+OM_CXXFLAGS = $(shell $(PERL) -MExtUtils::Embed -e ccopts)
+OM_LDFLAGS = $(shell $(PERL) -MExtUtils::Embed -e ldopts)
+
+TARGET = $(library-install)
+.DEFAULT: $(TARGET)
