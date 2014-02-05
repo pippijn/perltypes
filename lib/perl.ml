@@ -150,6 +150,15 @@ end = struct
 
 end
 
+
+
+(********************************************************************
+ *
+ *                              TEST CODE
+ *
+ ********************************************************************)
+
+
 (* old stuff not supported by new stuff yet (tuple returns) *)
 let stuff msg =
   List.map string_of_sv
